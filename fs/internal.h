@@ -11,6 +11,7 @@
 
 struct super_block;
 struct file_system_type;
+struct iomap;
 struct linux_binprm;
 struct path;
 struct mount;
@@ -39,6 +40,8 @@ static inline int __sync_blockdev(struct block_device *bdev, int wait)
  * buffer.c
  */
 extern void guard_bio_eod(int rw, struct bio *bio);
+extern int __block_write_begin_int(struct page *page, loff_t pos, unsigned len,
+		get_block_t *get_block, struct iomap *iomap);
 
 /*
  * char_dev.c
@@ -55,7 +58,7 @@ extern int vfs_path_lookup(struct dentry *, struct vfsmount *,
 /*
  * namespace.c
  */
-extern int copy_mount_options(const void __user *, unsigned long *);
+extern void *copy_mount_options(const void __user *);
 extern char *copy_mount_string(const void __user *);
 
 extern struct vfsmount *lookup_mnt(struct path *);
@@ -130,6 +133,7 @@ extern int invalidate_inodes(struct super_block *, bool);
 extern struct dentry *__d_alloc(struct super_block *, const struct qstr *);
 extern int d_set_mounted(struct dentry *dentry);
 extern long prune_dcache_sb(struct super_block *sb, struct shrink_control *sc);
+extern struct dentry *d_alloc_cursor(struct dentry *);
 
 /*
  * read_write.c
@@ -151,3 +155,10 @@ extern void mnt_pin_kill(struct mount *m);
  * fs/nsfs.c
  */
 extern struct dentry_operations ns_dentry_operations;
+
+/*
+ * fs/ioctl.c
+ */
+extern int do_vfs_ioctl(struct file *file, unsigned int fd, unsigned int cmd,
+		    unsigned long arg);
+extern long vfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg);

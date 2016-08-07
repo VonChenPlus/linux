@@ -61,7 +61,7 @@ affs_get_toupper(struct super_block *sb)
  * Note: the dentry argument is the parent dentry.
  */
 static inline int
-__affs_hash_dentry(struct qstr *qstr, toupper_t toupper, bool notruncate)
+__affs_hash_dentry(const struct dentry *dentry, struct qstr *qstr, toupper_t toupper, bool notruncate)
 {
 	const u8 *name = qstr->name;
 	unsigned long hash;
@@ -72,7 +72,7 @@ __affs_hash_dentry(struct qstr *qstr, toupper_t toupper, bool notruncate)
 	if (retval)
 		return retval;
 
-	hash = init_name_hash();
+	hash = init_name_hash(dentry);
 	len = min(qstr->len, AFFSNAMEMAX);
 	for (; len > 0; name++, len--)
 		hash = partial_name_hash(toupper(*name), hash);
@@ -84,7 +84,7 @@ __affs_hash_dentry(struct qstr *qstr, toupper_t toupper, bool notruncate)
 static int
 affs_hash_dentry(const struct dentry *dentry, struct qstr *qstr)
 {
-	return __affs_hash_dentry(qstr, affs_toupper,
+	return __affs_hash_dentry(dentry, qstr, affs_toupper,
 				  affs_nofilenametruncate(dentry));
 
 }
@@ -92,7 +92,7 @@ affs_hash_dentry(const struct dentry *dentry, struct qstr *qstr)
 static int
 affs_intl_hash_dentry(const struct dentry *dentry, struct qstr *qstr)
 {
-	return __affs_hash_dentry(qstr, affs_intl_toupper,
+	return __affs_hash_dentry(dentry, qstr, affs_intl_toupper,
 				  affs_nofilenametruncate(dentry));
 
 }
@@ -344,6 +344,7 @@ affs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 		return -ENOSPC;
 
 	inode->i_op = &affs_symlink_inode_operations;
+	inode_nohighmem(inode);
 	inode->i_data.a_ops = &affs_symlink_aops;
 	inode->i_mode = S_IFLNK | 0777;
 	mode_to_prot(inode);

@@ -331,6 +331,21 @@ static int usnic_port_immutable(struct ib_device *ibdev, u8 port_num,
 	return 0;
 }
 
+static void usnic_get_dev_fw_str(struct ib_device *device,
+				 char *str,
+				 size_t str_len)
+{
+	struct usnic_ib_dev *us_ibdev =
+		container_of(device, struct usnic_ib_dev, ib_dev);
+	struct ethtool_drvinfo info;
+
+	mutex_lock(&us_ibdev->usdev_lock);
+	us_ibdev->netdev->ethtool_ops->get_drvinfo(us_ibdev->netdev, &info);
+	mutex_unlock(&us_ibdev->usdev_lock);
+
+	snprintf(str, str_len, "%s", info.fw_version);
+}
+
 /* Start of PF discovery section */
 static void *usnic_ib_device_add(struct pci_dev *dev)
 {
@@ -343,16 +358,15 @@ static void *usnic_ib_device_add(struct pci_dev *dev)
 	netdev = pci_get_drvdata(dev);
 
 	us_ibdev = (struct usnic_ib_dev *)ib_alloc_device(sizeof(*us_ibdev));
-	if (IS_ERR_OR_NULL(us_ibdev)) {
+	if (!us_ibdev) {
 		usnic_err("Device %s context alloc failed\n",
 				netdev_name(pci_get_drvdata(dev)));
-		return ERR_PTR(us_ibdev ? PTR_ERR(us_ibdev) : -EFAULT);
+		return ERR_PTR(-EFAULT);
 	}
 
 	us_ibdev->ufdev = usnic_fwd_dev_alloc(dev);
-	if (IS_ERR_OR_NULL(us_ibdev->ufdev)) {
-		usnic_err("Failed to alloc ufdev for %s with err %ld\n",
-				pci_name(dev), PTR_ERR(us_ibdev->ufdev));
+	if (!us_ibdev->ufdev) {
+		usnic_err("Failed to alloc ufdev for %s\n", pci_name(dev));
 		goto err_dealloc;
 	}
 
@@ -415,6 +429,7 @@ static void *usnic_ib_device_add(struct pci_dev *dev)
 	us_ibdev->ib_dev.req_notify_cq = usnic_ib_req_notify_cq;
 	us_ibdev->ib_dev.get_dma_mr = usnic_ib_get_dma_mr;
 	us_ibdev->ib_dev.get_port_immutable = usnic_port_immutable;
+	us_ibdev->ib_dev.get_dev_fw_str     = usnic_get_dev_fw_str;
 
 
 	if (ib_register_device(&us_ibdev->ib_dev, NULL))

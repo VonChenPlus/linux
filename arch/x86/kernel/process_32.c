@@ -25,7 +25,7 @@
 #include <linux/delay.h>
 #include <linux/reboot.h>
 #include <linux/mc146818rtc.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/kallsyms.h>
 #include <linux/ptrace.h>
 #include <linux/personality.h>
@@ -278,14 +278,6 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	 */
 	if (get_kernel_rpl() && unlikely(prev->iopl != next->iopl))
 		set_iopl_mask(next->iopl);
-
-	/*
-	 * If it were not for PREEMPT_ACTIVE we could guarantee that the
-	 * preempt_count of all tasks was equal here and this would not be
-	 * needed.
-	 */
-	task_thread_info(prev_p)->saved_preempt_count = this_cpu_read(__preempt_count);
-	this_cpu_write(__preempt_count, task_thread_info(next_p)->saved_preempt_count);
 
 	/*
 	 * Now maybe handle debug registers and/or IO bitmaps

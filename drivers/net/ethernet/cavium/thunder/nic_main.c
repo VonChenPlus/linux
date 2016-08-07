@@ -54,11 +54,6 @@ struct nicpf {
 	bool			irq_allocated[NIC_PF_MSIX_VECTORS];
 };
 
-static inline bool pass1_silicon(struct nicpf *nic)
-{
-	return nic->pdev->revision < 8;
-}
-
 /* Supported devices */
 static const struct pci_device_id nic_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, PCI_DEVICE_ID_THUNDER_NIC_PF) },
@@ -122,7 +117,7 @@ static void nic_send_msg_to_vf(struct nicpf *nic, int vf, union nic_mbx *mbx)
 	 * when PF writes to MBOX(1), in next revisions when
 	 * PF writes to MBOX(0)
 	 */
-	if (pass1_silicon(nic)) {
+	if (pass1_silicon(nic->pdev)) {
 		/* see the comment for nic_reg_write()/nic_reg_read()
 		 * functions above
 		 */
@@ -309,6 +304,7 @@ static void nic_set_lmac_vf_mapping(struct nicpf *nic)
 static void nic_init_hw(struct nicpf *nic)
 {
 	int i;
+	u64 cqm_cfg;
 
 	/* Enable NIC HW block */
 	nic_reg_write(nic, NIC_PF_CFG, 0x3);
@@ -345,6 +341,11 @@ static void nic_init_hw(struct nicpf *nic)
 	/* Enable VLAN ethertype matching and stripping */
 	nic_reg_write(nic, NIC_PF_RX_ETYPE_0_7,
 		      (2 << 19) | (ETYPE_ALG_VLAN_STRIP << 16) | ETH_P_8021Q);
+
+	/* Check if HW expected value is higher (could be in future chips) */
+	cqm_cfg = nic_reg_read(nic, NIC_PF_CQM_CFG);
+	if (cqm_cfg < NICPF_CQM_MIN_DROP_LEVEL)
+		nic_reg_write(nic, NIC_PF_CQM_CFG, NICPF_CQM_MIN_DROP_LEVEL);
 }
 
 /* Channel parse index configuration */
@@ -397,7 +398,7 @@ static void nic_config_cpi(struct nicpf *nic, struct cpi_cfg_msg *cfg)
 			padd = cpi % 8; /* 3 bits CS out of 6bits DSCP */
 
 		/* Leave RSS_SIZE as '0' to disable RSS */
-		if (pass1_silicon(nic)) {
+		if (pass1_silicon(nic->pdev)) {
 			nic_reg_write(nic, NIC_PF_CPI_0_2047_CFG | (cpi << 3),
 				      (vnic << 24) | (padd << 16) |
 				      (rssi_base + rssi));
@@ -467,7 +468,7 @@ static void nic_config_rss(struct nicpf *nic, struct rss_cfg_msg *cfg)
 	}
 
 	cpi_base = nic->cpi_base[cfg->vf_id];
-	if (pass1_silicon(nic))
+	if (pass1_silicon(nic->pdev))
 		idx_addr = NIC_PF_CPI_0_2047_CFG;
 	else
 		idx_addr = NIC_PF_MPI_0_2047_CFG;
@@ -498,6 +499,7 @@ static void nic_tx_channel_cfg(struct nicpf *nic, u8 vnic,
 	u32 rr_quantum;
 	u8 sq_idx = sq->sq_num;
 	u8 pqs_vnic;
+	int svf;
 
 	if (sq->sqs_mode)
 		pqs_vnic = nic->pqs_vf[vnic];
@@ -510,10 +512,19 @@ static void nic_tx_channel_cfg(struct nicpf *nic, u8 vnic,
 	/* 24 bytes for FCS, IPG and preamble */
 	rr_quantum = ((NIC_HW_MAX_FRS + 24) / 4);
 
-	tl4 = (lmac * NIC_TL4_PER_LMAC) + (bgx * NIC_TL4_PER_BGX);
+	if (!sq->sqs_mode) {
+		tl4 = (lmac * NIC_TL4_PER_LMAC) + (bgx * NIC_TL4_PER_BGX);
+	} else {
+		for (svf = 0; svf < MAX_SQS_PER_VF; svf++) {
+			if (nic->vf_sqs[pqs_vnic][svf] == vnic)
+				break;
+		}
+		tl4 = (MAX_LMAC_PER_BGX * NIC_TL4_PER_LMAC);
+		tl4 += (lmac * NIC_TL4_PER_LMAC * MAX_SQS_PER_VF);
+		tl4 += (svf * NIC_TL4_PER_LMAC);
+		tl4 += (bgx * NIC_TL4_PER_BGX);
+	}
 	tl4 += sq_idx;
-	if (sq->sqs_mode)
-		tl4 += vnic * 8;
 
 	tl3 = tl4 / (NIC_MAX_TL4 / NIC_MAX_TL3);
 	nic_reg_write(nic, NIC_PF_QSET_0_127_SQ_0_7_CFG2 |
@@ -615,6 +626,21 @@ static int nic_config_loopback(struct nicpf *nic, struct set_loopback *lbk)
 	return 0;
 }
 
+static void nic_enable_vf(struct nicpf *nic, int vf, bool enable)
+{
+	int bgx, lmac;
+
+	nic->vf_enabled[vf] = enable;
+
+	if (vf >= nic->num_vf_en)
+		return;
+
+	bgx = NIC_GET_BGX_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+	lmac = NIC_GET_LMAC_FROM_VF_LMAC_MAP(nic->vf_lmac_map[vf]);
+
+	bgx_lmac_rx_tx_enable(nic->node, bgx, lmac, enable);
+}
+
 /* Interrupt handler to handle mailbox messages from VFs */
 static void nic_handle_mbx_intr(struct nicpf *nic, int vf)
 {
@@ -714,14 +740,14 @@ static void nic_handle_mbx_intr(struct nicpf *nic, int vf)
 		break;
 	case NIC_MBOX_MSG_CFG_DONE:
 		/* Last message of VF config msg sequence */
-		nic->vf_enabled[vf] = true;
+		nic_enable_vf(nic, vf, true);
 		goto unlock;
 	case NIC_MBOX_MSG_SHUTDOWN:
 		/* First msg in VF teardown sequence */
-		nic->vf_enabled[vf] = false;
 		if (vf >= nic->num_vf_en)
 			nic->sqs_used[vf - nic->num_vf_en] = false;
 		nic->pqs_vf[vf] = 0;
+		nic_enable_vf(nic, vf, false);
 		break;
 	case NIC_MBOX_MSG_ALLOC_SQS:
 		nic_alloc_sqs(nic, &mbx.sqs_alloc);
@@ -1074,8 +1100,7 @@ static void nic_remove(struct pci_dev *pdev)
 
 	if (nic->check_link) {
 		/* Destroy work Queue */
-		cancel_delayed_work(&nic->dwork);
-		flush_workqueue(nic->check_link);
+		cancel_delayed_work_sync(&nic->dwork);
 		destroy_workqueue(nic->check_link);
 	}
 

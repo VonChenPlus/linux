@@ -94,7 +94,7 @@ static int __init init_inodecache(void)
 	isofs_inode_cachep = kmem_cache_create("isofs_inode_cache",
 					sizeof(struct iso_inode_info),
 					0, (SLAB_RECLAIM_ACCOUNT|
-					SLAB_MEM_SPREAD),
+					SLAB_MEM_SPREAD|SLAB_ACCOUNT),
 					init_once);
 	if (isofs_inode_cachep == NULL)
 		return -ENOMEM;
@@ -174,7 +174,7 @@ struct iso9660_options{
  * Compute the hash for the isofs name corresponding to the dentry.
  */
 static int
-isofs_hashi_common(struct qstr *qstr, int ms)
+isofs_hashi_common(const struct dentry *dentry, struct qstr *qstr, int ms)
 {
 	const char *name;
 	int len;
@@ -188,7 +188,7 @@ isofs_hashi_common(struct qstr *qstr, int ms)
 			len--;
 	}
 
-	hash = init_name_hash();
+	hash = init_name_hash(dentry);
 	while (len--) {
 		c = tolower(*name++);
 		hash = partial_name_hash(c, hash);
@@ -231,7 +231,7 @@ static int isofs_dentry_cmp_common(
 static int
 isofs_hashi(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hashi_common(qstr, 0);
+	return isofs_hashi_common(dentry, qstr, 0);
 }
 
 static int
@@ -246,7 +246,7 @@ isofs_dentry_cmpi(const struct dentry *parent, const struct dentry *dentry,
  * Compute the hash for the isofs name corresponding to the dentry.
  */
 static int
-isofs_hash_common(struct qstr *qstr, int ms)
+isofs_hash_common(const struct dentry *dentry, struct qstr *qstr, int ms)
 {
 	const char *name;
 	int len;
@@ -258,7 +258,7 @@ isofs_hash_common(struct qstr *qstr, int ms)
 			len--;
 	}
 
-	qstr->hash = full_name_hash(name, len);
+	qstr->hash = full_name_hash(dentry, name, len);
 
 	return 0;
 }
@@ -266,13 +266,13 @@ isofs_hash_common(struct qstr *qstr, int ms)
 static int
 isofs_hash_ms(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hash_common(qstr, 1);
+	return isofs_hash_common(dentry, qstr, 1);
 }
 
 static int
 isofs_hashi_ms(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hashi_common(qstr, 1);
+	return isofs_hashi_common(dentry, qstr, 1);
 }
 
 static int
@@ -1021,7 +1021,7 @@ int isofs_get_blocks(struct inode *inode, sector_t iblock,
 		 * the page with useless information without generating any
 		 * I/O errors.
 		 */
-		if (b_off > ((inode->i_size + PAGE_CACHE_SIZE - 1) >> ISOFS_BUFFER_BITS(inode))) {
+		if (b_off > ((inode->i_size + PAGE_SIZE - 1) >> ISOFS_BUFFER_BITS(inode))) {
 			printk(KERN_DEBUG "%s: block >= EOF (%lu, %llu)\n",
 				__func__, b_off,
 				(unsigned long long)inode->i_size);
@@ -1417,6 +1417,7 @@ static int isofs_read_inode(struct inode *inode, int relocated)
 		inode->i_fop = &isofs_dir_operations;
 	} else if (S_ISLNK(inode->i_mode)) {
 		inode->i_op = &page_symlink_inode_operations;
+		inode_nohighmem(inode);
 		inode->i_data.a_ops = &isofs_symlink_aops;
 	} else
 		/* XXX - parse_rock_ridge_inode() had already set i_rdev. */

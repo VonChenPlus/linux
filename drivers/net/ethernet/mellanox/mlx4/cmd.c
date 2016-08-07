@@ -1010,7 +1010,7 @@ static int mlx4_MAD_IFC_wrapper(struct mlx4_dev *dev, int slave,
 		if (!(smp->mgmt_class == IB_MGMT_CLASS_SUBN_LID_ROUTED &&
 		      smp->method == IB_MGMT_METHOD_GET) || network_view) {
 			mlx4_err(dev, "Unprivileged slave %d is trying to execute a Subnet MGMT MAD, class 0x%x, method 0x%x, view=%s for attr 0x%x. Rejecting\n",
-				 slave, smp->method, smp->mgmt_class,
+				 slave, smp->mgmt_class, smp->method,
 				 network_view ? "Network" : "Host",
 				 be16_to_cpu(smp->attr_id));
 			return -EPERM;
@@ -2429,7 +2429,7 @@ err_thread:
 	flush_workqueue(priv->mfunc.master.comm_wq);
 	destroy_workqueue(priv->mfunc.master.comm_wq);
 err_slaves:
-	while (--i) {
+	while (i--) {
 		for (port = 1; port <= MLX4_MAX_PORTS; port++)
 			kfree(priv->mfunc.master.slave_state[i].vlan_filter[port]);
 	}
@@ -2597,7 +2597,6 @@ int mlx4_cmd_use_events(struct mlx4_dev *dev)
 	priv->cmd.free_head = 0;
 
 	sema_init(&priv->cmd.event_sem, priv->cmd.max_cmds);
-	spin_lock_init(&priv->cmd.context_lock);
 
 	for (priv->cmd.token_mask = 1;
 	     priv->cmd.token_mask < priv->cmd.max_cmds;

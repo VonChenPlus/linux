@@ -42,19 +42,63 @@ const char *sti_plane_to_str(struct sti_plane *plane)
 		return "<UNKNOWN PLANE>";
 	}
 }
-EXPORT_SYMBOL(sti_plane_to_str);
 
-static void sti_plane_destroy(struct drm_plane *drm_plane)
+#define STI_FPS_INTERVAL_MS     3000
+
+void sti_plane_update_fps(struct sti_plane *plane,
+			  bool new_frame,
+			  bool new_field)
 {
-	DRM_DEBUG_DRIVER("\n");
+	ktime_t now;
+	struct sti_fps_info *fps;
+	int fpks, fipks, ms_since_last, num_frames, num_fields;
 
-	drm_plane_helper_disable(drm_plane);
-	drm_plane_cleanup(drm_plane);
+	now = ktime_get();
+
+	/* Compute number of frame updates */
+	fps = &plane->fps_info;
+
+	if (new_field)
+		fps->curr_field_counter++;
+
+	/* do not perform fps calcul if new_frame is false */
+	if (!new_frame)
+		return;
+
+	fps->curr_frame_counter++;
+	ms_since_last = ktime_to_ms(ktime_sub(now, fps->last_timestamp));
+	num_frames = fps->curr_frame_counter - fps->last_frame_counter;
+
+	if (num_frames <= 0  || ms_since_last < STI_FPS_INTERVAL_MS)
+		return;
+
+	fps->last_timestamp = now;
+	fps->last_frame_counter = fps->curr_frame_counter;
+	fpks = (num_frames * 1000000) / ms_since_last;
+	snprintf(plane->fps_info.fps_str, FPS_LENGTH, "%-6s @ %d.%.3d fps",
+		 sti_plane_to_str(plane), fpks / 1000, fpks % 1000);
+
+	if (fps->curr_field_counter) {
+		/* Compute number of field updates */
+		num_fields = fps->curr_field_counter - fps->last_field_counter;
+		fps->last_field_counter = fps->curr_field_counter;
+		fipks = (num_fields * 1000000) / ms_since_last;
+		snprintf(plane->fps_info.fips_str,
+			 FPS_LENGTH, " - %d.%.3d field/sec",
+			 fipks / 1000, fipks % 1000);
+	} else {
+		plane->fps_info.fips_str[0] = '\0';
+	}
+
+	if (fps->output)
+		DRM_INFO("%s%s\n",
+			 plane->fps_info.fps_str,
+			 plane->fps_info.fips_str);
 }
 
-static int sti_plane_set_property(struct drm_plane *drm_plane,
-				  struct drm_property *property,
-				  uint64_t val)
+int sti_plane_set_property(struct drm_plane *drm_plane,
+			   struct drm_property *property,
+			   uint64_t val)
 {
 	struct drm_device *dev = drm_plane->dev;
 	struct sti_private *private = dev->dev_private;
@@ -108,15 +152,3 @@ void sti_plane_init_property(struct sti_plane *plane,
 			 plane->drm_plane.base.id,
 			 sti_plane_to_str(plane), plane->zorder);
 }
-EXPORT_SYMBOL(sti_plane_init_property);
-
-struct drm_plane_funcs sti_plane_helpers_funcs = {
-	.update_plane = drm_atomic_helper_update_plane,
-	.disable_plane = drm_atomic_helper_disable_plane,
-	.destroy = sti_plane_destroy,
-	.set_property = sti_plane_set_property,
-	.reset = drm_atomic_helper_plane_reset,
-	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
-};
-EXPORT_SYMBOL(sti_plane_helpers_funcs);
